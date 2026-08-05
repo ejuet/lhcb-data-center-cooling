@@ -74,7 +74,6 @@ class Agent:
         self.previous_action: np.ndarray | None = None
         self.steps = 0
         self.fits = _load_fits()
-        self.inside_step = 5.0
         self.ramp_limit = 25.0
         # Keep only distinct disturbance samples. reset() and the first step()
         # expose the same disturbance, so blindly retaining every observation
@@ -90,75 +89,6 @@ class Agent:
         self.plan_queues: list[list[tuple[float, float]]] = [
             [] for _ in range(N_MODULES)
         ]
-
-    def _economic_action(
-        self,
-        module: int,
-        load_kw: float,
-        return_c: float,
-        outdoor: float,
-        humidity: float,
-        wet_bulb: float,
-        adiabatic: bool,
-    ) -> tuple[float, float, float]:
-        """Globally select water and inside fan on the safe-capacity boundary."""
-        if self.previous_action is None:
-            fan_lo, fan_hi = 20.0, 100.0
-            inside_lo, inside_hi = 40.0, 100.0
-            water_lo, water_hi = (0.0, 80.0) if adiabatic else (0.0, 0.0)
-        else:
-            prev = self.previous_action[3 * module : 3 * module + 3]
-            fan_lo, fan_hi = max(20.0, prev[0] - self.ramp_limit), min(100.0, prev[0] + self.ramp_limit)
-            inside_lo, inside_hi = max(40.0, prev[1] - self.ramp_limit), min(100.0, prev[1] + self.ramp_limit)
-            if adiabatic:
-                water_lo, water_hi = max(0.0, prev[2] - self.ramp_limit), min(80.0, prev[2] + self.ramp_limit)
-            else:
-                water_lo = water_hi = 0.0
-
-        waters = np.arange(np.ceil(water_lo), water_hi + 0.1, 1.0)
-        if waters.size == 0:
-            waters = np.asarray([water_lo])
-        fans = _required_fan(np.full(waters.shape, load_kw), waters, outdoor, wet_bulb)
-        safe = fans <= fan_hi + 1e-9
-        if not np.any(safe):
-            # Ramp reachability can make the exact boundary temporarily
-            # impossible at a mode transition. Maximise available capacity.
-            return fan_hi, inside_lo, water_hi
-        waters = waters[safe]
-        minimum_fans = np.clip(fans[safe], fan_lo, fan_hi)
-
-        fans = minimum_fans
-
-        inside_values = np.arange(
-            np.ceil(inside_lo / self.inside_step) * self.inside_step,
-            inside_hi + 0.1,
-            self.inside_step,
-        )
-        if inside_values.size == 0:
-            inside_values = np.asarray([inside_lo])
-        water_grid = np.repeat(waters, inside_values.size)
-        fan_grid = np.repeat(fans, inside_values.size)
-        inside_grid = np.tile(inside_values, waters.size)
-        n = water_grid.size
-        features = np.column_stack(
-            [
-                np.full(n, load_kw * 1000.0),
-                np.full(n, return_c),
-                np.full(n, outdoor),
-                np.full(n, humidity),
-                np.full(n, wet_bulb),
-                fan_grid,
-                inside_grid,
-                water_grid,
-            ]
-        )
-        regime = "adiabatic" if adiabatic else "dry"
-        model = self.fits[module][regime]
-        power_w = np.maximum(model.predict(features), 0.0)
-        # Reward charges electrical power in MW and water at 0.0004 per point.
-        objective = power_w / 1_000_000.0 + 0.0004 * water_grid
-        best = int(np.argmin(objective))
-        return float(fan_grid[best]), float(inside_grid[best]), float(water_grid[best])
 
     @staticmethod
     def _forecast_from_history(history: list[np.ndarray], offset: int) -> np.ndarray:
