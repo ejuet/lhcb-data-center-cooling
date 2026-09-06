@@ -109,9 +109,12 @@ def main() -> None:
     axes[0].plot(minute, data["max_inlet"], color="black", lw=1.6, ls="--", label="Maximum")
     axes[0].axhline(27.0, color="0.35", lw=1, ls=":", label="27 °C target")
     axes[0].axhline(35.0, color="#d55e00", lw=1, ls=":", label="35 °C ceiling")
+    # This episode's inlet temperatures are tightly regulated at the 27 °C
+    # target. A fixed micro-range makes those small module differences legible
+    # while still using absolute Celsius labels.
     axes[0].set(
         ylabel="Rack inlet [°C]",
-        ylim=(26.0, max(36.0, float(data["max_inlet"].max()) + 1.0)),
+        ylim=(27.0, 27.0003),
         title=f"MPC thermal and energy outcomes — seed {args.seed}",
     )
     axes[0].ticklabel_format(axis="y", style="plain", useOffset=False)
