@@ -89,6 +89,10 @@ class Agent:
         self.plan_queues: list[list[tuple[float, float]]] = [
             [] for _ in range(N_MODULES)
         ]
+        # Kept for diagnostics and the accompanying plotting utilities.  It is
+        # deliberately only the latest decision, so normal evaluation does not
+        # accumulate episode-sized logs in the submission agent.
+        self.last_trace: dict[str, Any] | None = None
 
     @staticmethod
     def _forecast_from_history(history: list[np.ndarray], offset: int) -> np.ndarray:
@@ -320,6 +324,8 @@ class Agent:
         forecast_humidity = float(current["humidity"])
         predicted_adiabatic = bool(current["adiabatic"])
         desired = np.empty(3 * N_MODULES, dtype=np.float64)
+        queue_lengths_before: list[int] = []
+        new_plans: list[list[tuple[float, float]] | None] = []
         for module in range(N_MODULES):
             # The fitted models choose the minimum inside-fan setting in
             # virtually every state (and its measured oracle gain is
@@ -343,6 +349,8 @@ class Agent:
             )
             fan = float(np.clip(fan, 20.0, 100.0))
             water = 0.0
+            queue_lengths_before.append(len(self.plan_queues[module]))
+            new_plan: list[tuple[float, float]] | None = None
             if predicted_adiabatic:
                 queue = self.plan_queues[module]
                 if not queue:
@@ -352,6 +360,7 @@ class Agent:
                         # receding-horizon planning while reducing tree-model
                         # inference by approximately a factor of four.
                         queue.extend(planned[:4])
+                        new_plan = planned
                 if queue:
                     planned_fan, water = queue.pop(0)
                     current_fan = float(
@@ -369,6 +378,7 @@ class Agent:
                     fan, water = 100.0, 80.0
             else:
                 self.plan_queues[module].clear()
+            new_plans.append(new_plan)
             desired[3 * module : 3 * module + 3] = (fan, inside, water)
         desired = np.clip(desired, LOW, HIGH)
 
@@ -386,5 +396,13 @@ class Agent:
             applied[2::3] = 0.0
 
         self.previous_action = applied
+        self.last_trace = {
+            "trajectory": trajectory,
+            "adiabatic": predicted_adiabatic,
+            "queue_lengths_before": queue_lengths_before,
+            "new_plans": new_plans,
+            "desired_action": desired.copy(),
+            "applied_action": applied.copy(),
+        }
         self.steps += 1
         return desired.astype(np.float32)

@@ -2,3 +2,4 @@ starting_kit/*
 __pycache__/
 *.pyc
 .venv
+artifacts/
